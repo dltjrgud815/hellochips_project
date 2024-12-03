@@ -7,7 +7,8 @@ MAINCORE_HOMEIMAGE_DIR="$HOME/topst/build/tcc8050-main/tmp/deploy/"
 MOUNT_POINT="/mnt/home-dir"
 
 MAIN_SOURCE_DIR="./src/A72-main/"
-CR5_SOURCE_DIR="./src/R5-mcu/"
+CR5_EXTRENEL_DIR="./src/R5-externel/"
+CR5_INTRENEL_DIR="./src/R5-internel/"
 
 CR5_DIR="$HOME/topst/cr5-bsp/sources/app.sample/"
 CR5_IMAGE_DIR="$HOME/topst/cr5-bsp/sources/build/tcc805x/gcc/tcc805x-freertos-debug/cr5_snor.rom"
@@ -22,7 +23,8 @@ show_help() {
     echo "  -c setting : 빌드 경로를 설정합니다."
     echo "  -c show    : 저장된 경로를 표시합니다."
     echo "  -c main   : main source 를 home-image에 구워 자동 빌드, 이미지 생성, 복사 실행 => fwdn.bat 실행 시, home으로 구워야 함"
-    echo "  -c mcu    : 하위 디렉토리 알아서 복붙 및 rules.mk 도 자동 추가, 이미지 복사"
+    echo "  -c internel : R5-internel 폴더 내 소스파일로 펌웨어 이미지 생성"
+    echo "  -c externel : R5-externel 폴더 내 소스파일로 펌웨어 이미지 생성"
     exit 1
 }
 
@@ -239,8 +241,27 @@ add_include_to_rules() {
 }
 
 # 소스 디렉토리 처리
-process_directories() {
-    for dir in "$CR5_SOURCE_DIR"*; do
+process_externel_directories() {
+    for dir in "$CR5_EXTRENEL_DIR"*; do
+        if [ -d "$dir" ]; then
+            dir_name=$(basename "$dir")
+            target_dir="$CR5_DIR/$dir_name"
+
+            if [ -d "$target_dir" ]; then
+                echo "Directory $target_dir already exists. Copying source files..."
+                cp -r "$dir"/* "$target_dir"
+            else
+                echo "Directory $target_dir does not exist. Creating and adding to rules.mk."
+                mkdir -p "$target_dir"
+                add_include_to_rules "$dir_name"
+                cp -r "$dir"/* "$target_dir"
+            fi
+        fi
+    done
+}
+
+process_internel_directories() {
+    for dir in "$CR5_INTERNEL_DIR"*; do
         if [ -d "$dir" ]; then
             dir_name=$(basename "$dir")
             target_dir="$CR5_DIR/$dir_name"
@@ -338,8 +359,14 @@ copy_cr5image_to_fwdn() {
     return 0
 }
 
-mcu_build() {
-    process_directories
+internel_mcu_build() {
+    process_internel_directories
+    run_autolinux_cr5
+    copy_cr5image_to_fwdn
+}
+
+externel_mcu_build() {
+    process_exterenl_directories
     run_autolinux_cr5
     copy_cr5image_to_fwdn
 }
@@ -363,8 +390,11 @@ while getopts "c:" opt; do
                 main)
                     main_build
                     ;;
-                mcu)
-                    mcu_build
+                externel)
+                    externel_mcu_build
+                    ;;
+                internel)
+                    internel_mcu_build
                     ;;
                 *)
                     echo "잘못된 옵션입니다: $OPTARG"
