@@ -7,15 +7,14 @@ MAINCORE_HOMEIMAGE_DIR="$HOME/topst/build/tcc8050-main/tmp/deploy/"
 MOUNT_POINT="/mnt/home-dir"
 
 MAIN_SOURCE_DIR="./src/A72-main/"
-CR5_EXTRENEL_DIR="./src/R5-externel/"
-CR5_INTRENEL_DIR="./src/R5-internel/"
+CR5_EXTERNEL_DIR="./src/R5-externel"
+CR5_INTERNEL_DIR="./src/R5-internel"
 
-CR5_DIR="$HOME/topst/cr5-bsp/sources/app.sample/"
+CR5_DIR="$HOME/topst/cr5-bsp/sources"
 CR5_IMAGE_DIR="$HOME/topst/cr5-bsp/sources/build/tcc805x/gcc/tcc805x-freertos-debug/cr5_snor.rom"
 
 MAINCORE_HOMEIMAGE="home-directory.ext4"
 CR5_IMAGE="cr5_snor.rom"
-RULES_FILE="$CR5_DIR/rules.mk"
 
 # 도움말 함수
 show_help() {
@@ -222,7 +221,10 @@ main_build() {
 # rules.mk 에 추가하는 함수
 add_include_to_rules() {
     local dir_name="$1"
-    local include_line="include \$(MCU_BSP_APP_SAMPLE_PATH)/$dir_name/rules.mk"
+    local base_dir=$(basename "$dir_name")
+    local include_line="include \$(MCU_BSP_APP_SAMPLE_PATH)/$base_dir/rules.mk"
+    parent_dir=$(dirname "$dir_name")
+    local RULES_FILE="$parent_dir/rules.mk"
 
     # rules.mk 파일이 없으면 생성
     if [ ! -f "$RULES_FILE" ]; then
@@ -240,41 +242,28 @@ add_include_to_rules() {
     fi
 }
 
-# 소스 디렉토리 처리
-process_externel_directories() {
-    for dir in "$CR5_EXTRENEL_DIR"*; do
-        if [ -d "$dir" ]; then
-            dir_name=$(basename "$dir")
-            target_dir="$CR5_DIR/$dir_name"
+# 디렉토리 탐색 및 복사 함수
+copy_and_merge() {
+    local src="$1"
+    local dest="$2"
 
-            if [ -d "$target_dir" ]; then
-                echo "Directory $target_dir already exists. Copying source files..."
-                cp -r "$dir"/* "$target_dir"
-            else
-                echo "Directory $target_dir does not exist. Creating and adding to rules.mk."
-                mkdir -p "$target_dir"
-                add_include_to_rules "$dir_name"
-                cp -r "$dir"/* "$target_dir"
-            fi
-        fi
-    done
-}
+    # 현재 디렉토리가 없는 경우 생성
+    if [ ! -d "$dest" ]; then
+        mkdir -p "$dest"
+        add_include_to_rules "$dest"
+    fi
 
-process_internel_directories() {
-    for dir in "$CR5_INTERNEL_DIR"*; do
-        if [ -d "$dir" ]; then
-            dir_name=$(basename "$dir")
-            target_dir="$CR5_DIR/$dir_name"
-
-            if [ -d "$target_dir" ]; then
-                echo "Directory $target_dir already exists. Copying source files..."
-                cp -r "$dir"/* "$target_dir"
-            else
-                echo "Directory $target_dir does not exist. Creating and adding to rules.mk."
-                mkdir -p "$target_dir"
-                add_include_to_rules "$dir_name"
-                cp -r "$dir"/* "$target_dir"
-            fi
+    # 소스 디렉토리의 파일과 서브디렉토리 순회
+    for item in "$src"/*; do
+        if [ -f "$item" ]; then
+            # 파일인 경우 대상 디렉토리에 복사
+            echo "Copying file $item to $dest"
+            cp "$item" "$dest/"
+        elif [ -d "$item" ]; then
+            # 디렉토리인 경우 재귀적으로 복사
+            sub_dir_name=$(basename "$item")
+            echo "Entering directory $item"
+            copy_and_merge "$item" "$dest/$sub_dir_name"
         fi
     done
 }
@@ -360,13 +349,13 @@ copy_cr5image_to_fwdn() {
 }
 
 internel_mcu_build() {
-    process_internel_directories
+    copy_and_merge $CR5_INTERNEL_DIR $CR5_DIR
     run_autolinux_cr5
-    copy_cr5image_to_fwdn
+    copy_cr5image_to_fwdn 
 }
 
 externel_mcu_build() {
-    process_exterenl_directories
+    copy_and_merge $CR5_EXTERNEL_DIR $CR5_DIR
     run_autolinux_cr5
     copy_cr5image_to_fwdn
 }
