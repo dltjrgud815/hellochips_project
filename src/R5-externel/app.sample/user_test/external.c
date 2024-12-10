@@ -15,8 +15,12 @@
 static void Ultra_Test(void *pArg);
 static uint32 calculate_distance(uint32 duration_ticks);
 static uint32 ultrasonic_read_distance(void) ;
+
 SALRetCode_t CreateQueue(void);
 void EnqueueData(uint32 data);
+
+uint32 weighted_moving_average_filter(UltrasonicFilterState *state, uint32 new_distance);
+void initialize_filter(UltrasonicFilterState *state);
 /////////////////////<Function>///////////////////////
 static uint32 calculate_distance(uint32 duration_ticks) {
     // 클럭 값을 마이크로초로 변환 후 거리 계산
@@ -24,7 +28,7 @@ static uint32 calculate_distance(uint32 duration_ticks) {
     return (duration_us * SOUND_SPEED_CM_PER_US) / 2.0;  // 왕복 거리이므로 나누기 2
 }
 
-static uint32 ultrasonic_read_distance() {
+static uint32 ultrasonic_read_distance(UltrasonicFilterState *filter_state) {
     timer_on();
     uint32 start_time = 0;
     uint32 end_time = 0;
@@ -38,18 +42,35 @@ static uint32 ultrasonic_read_distance() {
     delay_us3(10);
     GPIO_Set(TRIGGER_PIN, 0UL);
  
-   
-    while (GPIO_Get(ECHO_PIN) == 0UL);
+    uint32 timeout_start = TIMER_GetCurrentMainCounter();
+    while (GPIO_Get(ECHO_PIN) == 0UL){
+        if ((TIMER_GetCurrentMainCounter() - timeout_start) > TIMEOUT_US) {
+            //mcu_printf("Timeout waiting for ECHO LOW\n");
+            return; // 타임아웃 발생 시 종료
+        }
+    }
     start_time = TIMER_GetCurrentMainCounter();  // 타이머 값 읽기
 
     // 에코 핀이 LOW가 될 때까지 대기 (end_time 기록)
-    while (GPIO_Get(ECHO_PIN) == 1UL);
+    timeout_start = TIMER_GetCurrentMainCounter();
+    while (GPIO_Get(ECHO_PIN) == 1UL){
+        if ((TIMER_GetCurrentMainCounter() - timeout_start) > TIMEOUT_US) {
+            //mcu_printf("Timeout waiting for ECHO LOW\n");
+            return; // 타임아웃 발생 시 종료
+        }
+    }
     end_time = TIMER_GetCurrentMainCounter();    // 타이머 값 읽기
     
     uint32 duration_us = end_time - start_time;
     TIMER_Disable(TIMER_CH_2);
-    dist = calculate_distance(duration_us);
 
+    dist = 400;
+    uint32 raw_data = calculate_distance(duration_us);
+    if(raw_data > 0 && raw_data < 400){
+        dist = weighted_moving_average_filter(filter_state, raw_data);
+        // 거리 계산
+    }
+    else return;
     // 거리 계산
     //mcu_printf("dura : 0x%08X\n",duration_us);
     //mcu_printf("tick: %d\n",duration_us);
@@ -101,6 +122,34 @@ void EnqueueData(uint32 data) {
 	/*
     }*/
 
+}
+//가중 이동 평균 필터
+uint32 weighted_moving_average_filter(UltrasonicFilterState *state, uint32 new_distance) {
+    //const uint32 max_deviation = 400; // 허용 가능한 최대 편차
+    const uint32 weights[3] = {5, 3, 2}; // 최신 값부터 과거 값에 부여할 가중치
+
+    // 새 값을 배열에 저장
+    state->distances[state->index] = new_distance;
+    state->index = (state->index + 1) % 3;
+
+    // 가중 평균 계산
+    uint32 weighted_sum = 0;
+    uint32 total_weight = 0;
+    for (uint32 i = 0; i < 3; i++) {
+        // 최신 데이터를 weights[0]에 매핑
+        uint32 circular_index = (state->index + 3 - i) % 3; // 역순으로 인덱스 계산
+        weighted_sum += state->distances[circular_index] * weights[i];
+        total_weight += weights[i];
+    }
+
+    return weighted_sum / total_weight;
+}
+//필터 초기화
+void initialize_filter(UltrasonicFilterState *state) {
+    for (uint32 i = 0; i < 3; i++) {
+        state->distances[i] = 0; // 초기화
+    }
+    state->index = 0;
 }
 void LED_TEST_Task(void) //Ultrasonic임 이름만 아바꿈
 {   
