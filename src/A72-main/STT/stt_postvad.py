@@ -10,19 +10,44 @@ import socket
 import webrtcvad
 from scipy.signal import butter, lfilter
 from concurrent.futures import ThreadPoolExecutor
-import sysfs_control as sysf
+#import sysfs_control as sysf
 
-SERVER_PORT = 5000
+SERVER_IP = "10.42.0.2"
+SERVER_PORT = 12345
 BUFFER_SIZE = 1024
 
-commands = ["Hello Chips","헬로 칩스","등 켜줘", "등 꺼줘", "에어컨 켜줘", "에어컨 꺼줘", "음악 재생해줘", "음악 멈춰줘", "다음곡으로 넘겨줘", "이전곡으로 넘겨줘"]
+def receive_data(client_socket):
+    """
+    서버로부터 데이터를 수신하는 함수 (별도 스레드에서 실행)
+    """
+    while True:
+        try:
+            data = client_socket.recv(BUFFER_SIZE)
+            if not data:
+                print("서버와의 연결이 종료되었습니다.")
+                break
+            print(f"[서버]: {data.decode('utf-8')}")
+        except Exception as e:
+            print(f"데이터 수신 중 오류 발생: {e}")
+            break
+    client_socket.close()
+
+
+#commands = ["Hello Chips","헬로 칩스","등 켜줘", "등 꺼줘", "에어컨 켜줘", "에어컨 꺼줘", "음악 재생해줘", "음악 멈춰줘", "다음곡으로 넘겨줘", "이전곡으로 넘겨줘"]
 
 # 명령어와 번호 매핑
 commands = {
-    "음악 재생해줘": 0,
-    "음악 멈춰줘": 1,
-    "다음 곡 재생해줘": 2,
-    "이전 곡 재생해줘": 3
+    "헬로 칩스": "1 0",
+    "에어컨 켜줘": "2 1",
+    "에어컨 꺼줘": "2 0",
+    "등 켜줘": "3 1",
+    "등 꺼줘": "3 0",
+    "음악 재생해줘": "4 1", "음악 틀어줘": "4 1",
+    "음악 멈춰줘": "4 1", "음악 꺼줘": "4 1",
+    "다음 곡 재생해줘": "4 2", "다음곡 재생": "4 2",
+    "이전 곡 재생해줘": "4 3", "이전곡 재생": "4 3",
+    "음량 키워줘": "4 4", "볼륨 높여줘": "4 4",
+    "음량 낮춰줘": "4 5", "볼륨 줄여줘": "4 5"
 }
 
 def butter_bandpass(lowcut, highcut, fs, order=5):
@@ -47,24 +72,6 @@ def send_command_to_server(client_socket, command_number):
         print(f"[서버] 명령어 번호 {command_number}를 클라이언트로 전송했습니다.")
     except (ConnectionResetError, BrokenPipeError):
         print("[서버] 클라이언트 연결이 종료되었습니다.")
-
-def send_data(client_socket):
-    """
-    클라이언트로 명령을 전송하는 스레드 함수
-    """
-    while True:
-        try:
-            # 사용자 입력
-            command = input("[서버] 클라이언트에 보낼 명령 입력 (1: 일시 정지/재생, 2: 다음 곡, 3: 이전곡): ").strip()
-            if command not in ["1", "2", "3"]:
-                print("[서버] 잘못된 입력입니다. 1, 2, 3 중 하나를 입력하세요.")
-                continue
-
-            # 클라이언트에 명령 전송
-            client_socket.sendall(command.encode("utf-8"))
-        except (ConnectionResetError, BrokenPipeError):
-            print("[서버] 클라이언트 연결이 종료되었습니다.")
-            break
 
 class CustomFasterWhisper:
     def __init__(self, model_name="base"):
@@ -109,7 +116,7 @@ def record_audio_with_vad(filename, sample_rate=16000, vad_sensitivity=3, frame_
     audio_data = []
     print("녹음 시작... 음성이 감지되지 않으면 자동으로 종료됩니다.")
 
-    sysf.control_rgb_led_async()
+    #sysf.control_rgb_led_async()
 
     silence_start_time = time.time()
     max_silence_duration = 1.0  # 1초 동안 음성 없음 감지 시 종료
@@ -294,22 +301,15 @@ def reduce_noise(filename):
     print("노이즈 제거 완료:", noise_reduced_filename)
     return noise_reduced_filename
 
-def main():
-    global stop_recording_event
-    stop_recording_event = threading.Event()
-    #
+def main():    
+    #client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    #client_socket.connect((SERVER_IP, SERVER_PORT))
+    #print(f"서버에 연결되었습니다. (IP: {SERVER_IP}, Port: {SERVER_PORT})")
 
-    # 서버 소켓 생성
-    #server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    #server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
-    # 서버 소켓 바인딩
-    #server_socket.bind(("0.0.0.0", SERVER_PORT))
-    #server_socket.listen(1)
-    #print(f"[서버] {SERVER_PORT} 포트에서 대기 중입니다...")
-
-    #client_socket, client_address = server_socket.accept()
-    #print(f"[서버] 클라이언트 연결됨: {client_address}")
+    # 데이터 수신 스레드 시작
+    #recv_thread = threading.Thread(target=receive_data, args=(client_socket,))
+    #recv_thread.daemon = True
+    #recv_thread.start()
 
     while True:
         user_input = input("녹음을 시작하려면 's'를 입력하고 엔터를 누르세요. 종료하려면 'q'를 입력하고 엔터를 누르세요: ").strip().lower()
@@ -332,7 +332,7 @@ def main():
             #         break
             
             # 노이즈 제거 및 STT 수행
-            sysf.off_rgb_led()
+            #sysf.off_rgb_led()
             noise_reduced_file = reduce_noise(filename)
             command_number = model.run(noise_reduced_file)
 
@@ -342,11 +342,9 @@ def main():
         
         elif user_input == 'q':
             print("종료합니다.")
-            #client_socket.close()
-            #server_socket.close()
+            client_socket.close()
             break
         else:
             print("잘못된 입력입니다. 's' 또는 'q'를 입력하세요.")
-
 if __name__ == "__main__":
     main()
