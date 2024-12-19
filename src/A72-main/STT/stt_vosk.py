@@ -12,11 +12,13 @@ import alsaaudio
 import threading
 import noisereduce as nr
 from rapidfuzz import fuzz, process
+import control_sysfs as sysf
 
 SERVER_IP = "10.42.0.2"
 SERVER_PORT = 12345
 BUFFER_SIZE = 1024
-isProcess = False
+isControlProcessing = False
+lock = threading.Lock()
 
 # commands = ["헬로 칩스","등 켜줘", "등 꺼줘", "에어컨 켜줘", "에어컨 꺼줘",
 #              "음악 재생해줘","음악 틀어줘", 
@@ -52,10 +54,26 @@ def receive_data(client_socket):
                 print("서버와의 연결이 종료되었습니다.")
                 break
             print(f"[서버]: {data.decode('utf-8')}")
+            lock.acquire()
+            try:
+                isControlProcessing = False
+            finally:
+                # Lock 해제
+                lock.release()
         except Exception as e:
             print(f"데이터 수신 중 오류 발생: {e}")
             break
     client_socket.close()
+
+def send_command_to_server(client_socket, command_number):
+    """
+    클라이언트로 명령어 번호를 전송
+    """
+    try:
+        client_socket.sendall(str(command_number).encode("utf-8"))
+        print(f"[서버] 명령어 번호 {command_number}를 클라이언트로 전송했습니다.")
+    except (ConnectionResetError, BrokenPipeError):
+        print("[서버] 클라이언트 연결이 종료되었습니다.")
 
 def convert_mp3_to_wav(mp3_file, wav_file):
     """
@@ -151,8 +169,6 @@ def vad_for_hellochips(sample_rate=16000, vad_sensitivity=3, frame_duration=20):
     audio_data = []
     print("1초 이상의 음성 감지 중")
 
-    #sysf.control_rgb_led_async()
-
     silence_start_time = time.time()
     speech_start_time = None
     max_silence_duration = 1.0  # 1초 동안 음성 없음 감지 시 종료
@@ -196,8 +212,8 @@ def vad_for_hellochips(sample_rate=16000, vad_sensitivity=3, frame_duration=20):
                         print("음성 녹음을 저장합니다.")
                         audio_data = np.concatenate(audio_data)
                         save_audio_to_file(audio_data, sample_rate, output_file)
-                        isProcess = True
-                        break
+                        return output_file
+
     
   
 def record_audio_with_vad(filename, sample_rate=44100, vad_sensitivity=3, frame_duration=20):
@@ -285,7 +301,7 @@ def record_audio(filename, sample_rate=16000, duration=2):
     inp.setperiodsize(1024)
 
     print(f"녹음 시작... {duration}초 동안 녹음합니다.")
-    
+    sysf.on_rgb_led()
     audio_data = []
     start_time = time.time()
 
@@ -307,6 +323,7 @@ def record_audio(filename, sample_rate=16000, duration=2):
     )
     audio_segment.export(filename, format="wav", codec="pcm_s16le")
     print("녹음 완료:", filename)
+    sysf.off_rgb_led()
     return filename
 
 # Vosk 한국어 모델 로드
@@ -330,8 +347,7 @@ def transcribe_audio(filename):
     # 초기 문구 리스트 설정
     rec = KaldiRecognizer(model,
         wf.getframerate(),
-        '["헬로 칩스","등 켜줘", "등 꺼 줘", "에어컨 켜줘", "에어컨 꺼 줘","음악 재생해줘","음악 틀어 줘", "음악 멈춰줘", "음악 꺼줘","다음 곡 으로 넘겨줘", "다음 곡 재생","이전 곡 으로 넘겨줘", "이전 곡 재생","음량 키q\
-             줘", "볼륨 높여 줘","음량 낮춰 줘", "볼륨 줄여 줘","[unk]"]')
+        '["헬로 칩스","등 켜줘", "등 꺼 줘", "에어컨 켜줘", "에어컨 꺼 줘","음악 재생","음악 틀어 줘", "음악 정지", "음악 꺼 줘","다음 곡 으로 넘겨줘", "다음 곡 재생","이전 곡 으로 넘겨줘", "이전 곡 재생","음량 키워 줘", "볼륨 높여 줘","음량 낮춰 줘", "볼륨 줄여 줘","[unk]"]')
     start = time.time()
 
     rec.SetGrammar( '["헬로 칩스","등 켜줘", "등 꺼 줘", "에어컨 켜줘", "에어컨 꺼 줘","음악 재생","음악 틀어 줘", "음악 정지", "음악 꺼 줘","다음 곡 으로 넘겨줘", "다음 곡 재생","이전 곡 으로 넘겨줘", "이전 곡 재생","음량 키워 줘", "볼륨 높여 줘","음량 낮춰 줘", "볼륨 줄여 줘","[unk]"]')
@@ -361,69 +377,98 @@ def transcribe_audio(filename):
         command_text = best_match[0]
         command_number = commands[command_text]
         print(f"[서버] 인식된 명령어: {command_text}, 번호: {command_number}")
+        return command_number
     else:
         print("[서버] 명령어를 인식하지 못했습니다.")
+        lock.acquire()
+        try:
+            isControlProcessing = False
+        finally:
+            # Lock 해제
+            lock.release()
 
-def compare_audio_saving(sample_rate=60000):
-    # Compare durations
-    with wave.open("recorded_audio_wave.wav", "rb") as wf:
-        wave_duration = wf.getnframes() / wf.getframerate()
-        print(f"DEBUG: wave duration = {wave_duration}s")
-
-    audio_segment = AudioSegment.from_file("recorded_audio_pydub.wav")
-    pydub_duration = len(audio_segment) / 1000.0
-    print(f"DEBUG: pydub duration = {pydub_duration}s")
-
+        return 0
 
 def main():
-    #global stop_recording_event
-    #stop_recording_event = threading.Event()
-    
     #client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     #client_socket.connect((SERVER_IP, SERVER_PORT))
     #print(f"서버에 연결되었습니다. (IP: {SERVER_IP}, Port: {SERVER_PORT})")
 
-    # 데이터 수신 스레드 시작
     #recv_thread = threading.Thread(target=receive_data, args=(client_socket,))
     #recv_thread.daemon = True
     #recv_thread.start()
 
     while True:
-        user_input = input("녹음을 시작하려면 's'를 입력하고 엔터를 누르세요. 종료하려면 'q'를 입력하고 엔터를 누르세요: ").strip().lower()
-        if user_input == 's':
-            #stop_recording_event.clear()
-            filename = "recorded_audio.wav"
-            #filename = record_audio(filename)
-            #convert_mp3_to_wav(filename, "recorded_audio.wav")
-            
-            # 별도의 스레드에서 녹음 시작
-            #recording_thread = threading.Thread(target=record_audio, args=(filename,))
-            #recording_thread.start()
-            
-            # 'q'를 입력받으면 녹음 중지
-            # while True:
-            #     stop_input = input("녹음을 중지하려면 'q'를 입력하세요: ").strip().lower()
-            #     if stop_input == 'q':
-            #         stop_recording_event.set()
-            #         recording_thread.join()  # 녹음 스레드가 종료될 때까지 대기
-            #         break
-            
-            # 노이즈 제거 및 STT 수행
-            #sysf.off_rgb_led()
-            vad_for_hellochips()
-            noise_reduced_file = reduce_noise("post_vad.wav")
-            #filename = input()
-            transcribe_audio(noise_reduced_file)
-
-            # if command_number is not None:
-            #     print(f"[STT 완료] 명령어 번호: {command_number}")
-            #     send_command_to_server(client_socket, command_number)
-        
-        elif user_input == 'q':
-            print("종료합니다.")
-            #client_socket.close()
-            break
+        print("=== VAD 시작 ===")
+        #if (isControlProcessing):
+        #    continue
+        detected_file = vad_for_hellochips()  # 음성을 감지하고 파일 저장
+        reduce_noise(detected_file)
+        if transcribe_audio(detected_file) == "1 0":
+            print("헬로 칩스 인식됨 제어 녹음 시작")
+            filename = "process.wav"
+            filename = record_audio(filename)
+            command = transcribe_audio(filename)
+            if command:
+                #send_command_to_server(client_socket, command)
+                lock.acquire()
+                try:
+                    isControlProcessing = True
+                finally:
+                    # Lock 해제
+                    lock.release()
         else:
-            print("잘못된 입력입니다. 's' 또는 'q'를 입력하세요.")
+            print("헬로 칩스 인식 못함")
+
+# def main():
+#     #global stop_recording_event
+#     #stop_recording_event = threading.Event()
+    
+#     #client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+#     #client_socket.connect((SERVER_IP, SERVER_PORT))
+#     #print(f"서버에 연결되었습니다. (IP: {SERVER_IP}, Port: {SERVER_PORT})")
+
+#     # 데이터 수신 스레드 시작
+#     #recv_thread = threading.Thread(target=receive_data, args=(client_socket,))
+#     #recv_thread.daemon = True
+#     #recv_thread.start()
+
+#     while True:
+#         user_input = input("녹음을 시작하려면 's'를 입력하고 엔터를 누르세요. 종료하려면 'q'를 입력하고 엔터를 누르세요: ").strip().lower()
+#         if user_input == 's':
+#             #stop_recording_event.clear()
+#             filename = "recorded_audio.wav"
+#             #filename = record_audio(filename)
+#             #convert_mp3_to_wav(filename, "recorded_audio.wav")
+            
+#             # 별도의 스레드에서 녹음 시작
+#             #recording_thread = threading.Thread(target=record_audio, args=(filename,))
+#             #recording_thread.start()
+            
+#             # 'q'를 입력받으면 녹음 중지
+#             # while True:
+#             #     stop_input = input("녹음을 중지하려면 'q'를 입력하세요: ").strip().lower()
+#             #     if stop_input == 'q':
+#             #         stop_recording_event.set()
+#             #         recording_thread.join()  # 녹음 스레드가 종료될 때까지 대기
+#             #         break
+            
+#             # 노이즈 제거 및 STT 수행
+#             #sysf.off_rgb_led()
+#             vad_for_hellochips()
+#             noise_reduced_file = reduce_noise("post_vad.wav")
+#             #filename = input()
+#             transcribe_audio(noise_reduced_file)
+
+#             # if command_number is not None:
+#             #     print(f"[STT 완료] 명령어 번호: {command_number}")
+#             #     send_command_to_server(client_socket, command_number)
+        
+#         elif user_input == 'q':
+#             print("종료합니다.")
+#             #client_socket.close()
+#             break
+#         else:
+#             print("잘못된 입력입니다. 's' 또는 'q'를 입력하세요.")
 if __name__ == "__main__":
     main()
